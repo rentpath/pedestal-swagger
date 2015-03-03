@@ -3,7 +3,8 @@
             [pedestal.swagger.schema :as schema]
             [io.pedestal.http.route.definition :refer [expand-routes]]
             [io.pedestal.interceptor :as interceptor :refer [interceptor]]
-            [io.pedestal.interceptor.helpers :as helpers]
+            [io.pedestal.interceptor.helpers :as helpers :refer
+             [before after on-request handler]]
             [ring.util.response :refer [response resource-response redirect]]
             [ring.swagger.swagger2 :as spec]))
 
@@ -14,11 +15,10 @@
   ([] (swagger-doc (fn [context swagger-object]
                      (response (spec/swagger-json swagger-object)))))
   ([f]
-   (interceptor
-    {:name ::doc/swagger-doc
-     :enter
-     (fn [{:keys [route] :as context}]
-       (assoc context :response (f context (-> route meta ::doc/swagger-doc))))})))
+   (before
+    ::doc/swagger-doc
+    (fn [{:keys [route] :as context}]
+      (assoc context :response (f context (-> route meta ::doc/swagger-doc)))))))
 
 (defn swagger-ui
   "Creates an interceptor that serves the swagger ui on a path of your
@@ -27,18 +27,16 @@
   used to construct the swagger-object url (such as :app-name
   :your-app-name), using pedestal's 'path-for'."
   [& path-opts]
-  (interceptor
-   {:name ::doc/swagger-ui
-    :enter
-    (fn [{{:keys [path-params path-info url-for] :as request} :request :as ctx}]
-      (let [res (:resource path-params)]
-        (assoc ctx :response
-               (case res
-                 "" (redirect (str path-info "index.html"))
-                 "conf.js" (response (str "window.API_CONF = {url: \""
-                                          (apply url-for ::doc/swagger-doc path-opts)
-                                          "\"};"))
-                 (resource-response res {:root "swagger-ui/"})))))}))
+  (handler
+   ::doc/swagger-ui
+   (fn [{:keys [path-params path-info url-for]}]
+     (let [res (:resource path-params)]
+       (case res
+         "" (redirect (str path-info "index.html"))
+         "conf.js" (response (str "window.API_CONF = {url: \""
+                                  (apply url-for ::doc/swagger-doc path-opts)
+                                  "\"};"))
+         (resource-response res {:root "swagger-ui/"}))))))
 
 (defn coerce-params
   "Creates an interceptor that coerces the params for the selected
@@ -50,13 +48,12 @@
   consult 'pedestal.swagger.schema/?bad-request'."
   ([] (coerce-params schema/?bad-request))
   ([f]
-   (interceptor
-    {:name ::coerce-params
-     :enter
-     (fn [{:keys [request route] :as context}]
-       (if-let [schema (->> route meta ::doc/doc :parameters)]
-         (f schema context)
-         context))})))
+   (before
+    ::coerce-params
+    (fn [{:keys [route] :as context}]
+      (if-let [schema (->> route meta ::doc/doc :parameters)]
+        (f schema context)
+        context)))))
 
 (defn validate-response
   "Creates an interceptor that validates the response for the selected
@@ -68,15 +65,14 @@
   consult 'pedestal.swagger.schema/?internal-server-error'."
   ([] (validate-response schema/?internal-server-error))
   ([f]
-   (interceptor
-    {:name ::validate-response
-     :leave
-     (fn [{:keys [response route] :as context}]
-       (if-let [schemas (->> route meta ::doc/doc :responses)]
-         (if-let [schema (or (schemas (:status response)) (schemas :default))]
-           (f schema context)
-           context)
-         context))})))
+   (after
+    ::validate-response
+    (fn [{:keys [response route] :as context}]
+      (if-let [schemas (->> route meta ::doc/doc :responses)]
+        (if-let [schema (or (schemas (:status response)) (schemas :default))]
+          (f schema context)
+          context)
+        context)))))
 
 ;; Very useful interceptors
 
@@ -91,28 +87,26 @@
   :transit-params."
   ([] (body-params :json-params :edn-params :transit-params))
   ([& ks]
-   (interceptor
-    {:name ::body-params
-     :enter
-     (fn [{request :request :as ctx}]
-       (->> (map (partial get request) ks)
-            (apply merge)
-            (assoc-in ctx [:request :body-params])))})))
+   (before
+    ::body-params
+    (fn [{request :request :as ctx}]
+      (->> (map (partial get request) ks)
+           (apply merge)
+           (assoc-in ctx [:request :body-params]))))))
 
 (defn keywordize-params
   "Creates an interceptor that keywordizes the parameters map under the
   specified keys e.g. if you supply :form-params it will keywordize
   the keys in the request submap under :form-params."
   [& ks]
-  (interceptor
-   {:name ::keywordize-params
-    :enter
-    (fn [{request :request :as ctx}]
-      (assoc ctx :request
-             (->> (map (partial get request) ks)
-                  (map #(zipmap (map keyword (keys %)) (vals %)))
-                  (zipmap ks)
-                  (apply merge (apply dissoc request ks)))))}))
+  (before
+   ::keywordize-params
+   (fn [{request :request :as ctx}]
+     (assoc ctx :request
+            (->> (map (partial get request) ks)
+                 (map #(zipmap (map keyword (keys %)) (vals %)))
+                 (zipmap ks)
+                 (apply merge (apply dissoc request ks)))))))
 
 ;;;; Pedestal aliases
 
