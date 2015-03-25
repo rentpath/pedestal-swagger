@@ -39,7 +39,7 @@
 
 (defn- ->request-schema [schema]
   (->> (for [[k v] schema]
-         [(schema->param k)
+         [(get schema->param k k)
           (if (loose-schema? k)
             (loosen v)
             v)])
